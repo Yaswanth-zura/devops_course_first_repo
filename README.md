@@ -1,3 +1,2 @@
-# devops_course_first_repo
-
-hello 
+# DevOps Learning Repo
+This is my first Git workflow practice.
