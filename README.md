@@ -1,3 +1,3 @@
 # devops_course_first_repo
 
-hello 
+hello merging from release to main 
