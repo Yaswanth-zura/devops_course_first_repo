@@ -15,6 +15,7 @@ jobs:
 
     - name: Pirnt message
       run: echo "Code checkout sucessfully!"
+
     - name: List files
       run: ls -la
   test:
@@ -32,3 +33,6 @@ jobs:
    steps:
     - name: Deploy step
       run: echo "Deploying application"
+
+    - name: Deploy step 2
+      run: echo "Deploying application step 2"
