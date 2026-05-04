@@ -10,7 +10,7 @@ env:
 
 jobs:
   setup:
-    runs-on: ubuntu_latest
+    runs-on: ubuntu-latest
 
     outputs:
        MY_NAME: ${{ steps.set-name.outputs.name}}
@@ -22,7 +22,7 @@ jobs:
   
   build: 
     needs: setup
-    runs-on: ubuntu_latest
+    runs-on: ubuntu-latest
 
     env:
       NAME: ${{ needs.setup.outputs.MY_NAME}}
@@ -33,7 +33,7 @@ jobs:
     
   test:
     needs: build
-    runs-on: ubuntu_latest
+    runs-on: ubuntu-latest
 
     steps:
       - name: Run test
@@ -41,7 +41,7 @@ jobs:
   
   deploy:
     needs: test
-    runs-on: ubuntu_latest
+    runs-on: ubuntu-latest
 
     if: always()
 
