@@ -1,38 +1,53 @@
-name: Simple CI pipeline
+name: full beginner pipeline
 
 on:
   push:
     branches:
-     - main
-  
+      - main
+
+env:
+  GLOBAL_VAR: "Hello from global"
+
 jobs:
-  build:
-   runs-on: ubuntu-latest
+  setup:
+    runs-on: ubuntu_latest
 
-   steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    outputs:
+       MY_NAME: ${{ steps.set-name.outputs.name}}
 
-    - name: Pirnt message
-      run: echo "Code checkout sucessfully!"
-
-    - name: List files
-      run: ls -la
-  test:
-   needs: build
-   runs-on: ubuntu-latest
+    steps:
+      - name: set name
+        id: set-name
+        run: echo "name=Neli" >> $GITHUB_OUTPUT
   
-   steps:
-    - name: Run tests
-      run: echo "Running tests"
+  build: 
+    needs: setup
+    runs-on: ubuntu_latest
+
+    env:
+      NAME: ${{ needs.setup.outputs.MY_NAME}}
+
+    steps:
+      - name: print name
+        run: echo "Building for $NAME"
+    
+  test:
+    needs: build
+    runs-on: ubuntu_latest
+
+    steps:
+      - name: Run test
+        run: echo "running tests"
   
   deploy:
-   needs: test
-   runs-on: ubuntu-latest
-  
-   steps:
-    - name: Deploy step
-      run: echo "Deploying application"
+    needs: test
+    runs-on: ubuntu_latest
 
-    - name: Deploy step 2
-      run: echo "Deploying application step 2"
+    if: always()
+
+    steps:
+      - name: deploy
+        run: echo "deploying"
+
+
+        
