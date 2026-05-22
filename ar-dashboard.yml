@@ -1,0 +1,323 @@
+name: ar-test Actions
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+      - qa
+
+  workflow_dispatch:
+        
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  REGISTRY: ${{ secrets.REGISTRY }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}	
+  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+  GIT_USER_NAME: ${{ secrets.USER_NAME }}
+  GIT_USER_MAIL: ${{ secrets.USER_MAIL }}	  
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+  EMAIL_FROM: ""
+  EMAIL_RECIPIENTS: ""  
+  APPLICATION_NAME: "ar-test"  
+
+  jobs:
+  ENV_VAR:                 
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    outputs:
+      AWS_REGION: ${{ steps.set-env.outputs.AWS_REGION }}
+      AWS_EKS: ${{ steps.set-env.outputs.AWS_EKS }}
+      NAMESPACE: ${{ steps.set-env.outputs.NAMESPACE }}
+      DEPLOYMENT_FILE_NAME: ${{ steps.set-env.outputs.DEPLOYMENT_FILE_NAME }}
+      DEPLOYMENT_FOLDER_PATH: ${{ steps.set-env.outputs.DEPLOYMENT_FOLDER_PATH }}
+      # APPLICATION_NAME: ${{ steps.set-env.outputs.APPLICATION_NAME }}
+      REPOSITORY: ${{ steps.set-env.outputs.REPOSITORY }}
+      GIT_BRANCH: ${{ steps.set-env.outputs.GIT_BRANCH }}
+      BUILD_TYPE: ${{ steps.set-env.outputs.BUILD_TYPE }}
+      CURRENT_DATE: ${{ steps.set-env.outputs.CURRENT_DATE }}
+      BRANCH_NAME: ${{ steps.set-env.outputs.BRANCH_NAME }}
+      # HELM_CHART_NAME: ${{ steps.set-env.outputs.HELM_CHART_NAME }}
+    steps:
+      - name: Set environment variables        
+        id: set-env
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            BRANCH_NAME="${{ github.ref_name }}"
+          else
+            BRANCH_NAME="${{ github.event.pull_request.base.ref }}"
+          fi
+
+          if [[ "$BRANCH_NAME" == "qa" ]]; then                   
+            echo "NAMESPACE=ar-sandbox" >> $GITHUB_OUTPUT
+            echo "REPOSITORY=ar-sandbox-repo" >> $GITHUB_OUTPUT
+            echo "GIT_BRANCH=qa" >> $GITHUB_OUTPUT
+            echo "BUILD_TYPE=QA" >> $GITHUB_OUTPUT
+            echo "AWS_EKS=test" >> $GITHUB_OUTPUT  
+            # echo "HELM_CHART_NAME=ar-test" >> $GITHUB_OUTPUT         
+          elif [[ "$BRANCH_NAME" == "main" ]]; then
+            echo "NAMESPACE=ar-automation" >> $GITHUB_OUTPUT
+            echo "REPOSITORY=ar-automation-repo" >> $GITHUB_OUTPUT
+            echo "GIT_BRANCH=main" >> $GITHUB_OUTPUT
+            echo "BUILD_TYPE=PROD" >> $GITHUB_OUTPUT
+            echo "AWS_EKS=test-apps-prod-ec" >> $GITHUB_OUTPUT  
+            # echo "HELM_CHART_NAME=ar-test" >> $GITHUB_OUTPUT
+          else
+            echo "Not a valid branch"
+          fi
+
+          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "AWS_REGION=us-east-1" >> $GITHUB_OUTPUT
+          # echo "AWS_EKS=test-apps-ec" >> $GITHUB_OUTPUT          
+          echo "DEPLOYMENT_FILE_NAME=Deployment-Helm/values.yaml" >> $GITHUB_OUTPUT
+          echo "DEPLOYMENT_FOLDER_PATH=Deployment-Helm/" >> $GITHUB_OUTPUT
+          echo "CURRENT_DATE=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+          # echo "APPLICATION_NAME=ar-test" >> $GITHUB_OUTPUT
+      - name: Debug Output
+        run: |
+          echo "BRANCH NAME is ${{ steps.set-env.outputs.BRANCH_NAME }}"
+          echo "EKS is ${{ steps.set-env.outputs.AWS_EKS }}"
+          echo "NAMESPACE is ${{ steps.set-env.outputs.NAMESPACE }}"
+          echo "REPOSITORY is ${{ steps.set-env.outputs.REPOSITORY }}"
+          echo "DEPLOYMENT FOLDER PATH is ${{ steps.set-env.outputs.DEPLOYMENT_FOLDER_PATH }}"
+        
+  BUILD:
+    needs: 
+      - ENV_VAR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm install --force
+      - name: Build
+        run: npm run build
+
+  BUILD_AND_PUBLISH:
+    needs: 
+      - ENV_VAR
+      - BUILD
+    runs-on: ubuntu-latest
+    env:
+      REPOSITORY: ${{ needs.ENV_VAR.outputs.REPOSITORY }}
+      AWS_REGION: ${{ needs.ENV_VAR.outputs.AWS_REGION }}
+    
+      CURRENT_DATE: ${{ needs.ENV_VAR.outputs.CURRENT_DATE }}
+      BUILD_TYPE: ${{ needs.ENV_VAR.outputs.BUILD_TYPE }}
+      DEPLOYMENT_FILE_NAME: ${{ needs.ENV_VAR.outputs.DEPLOYMENT_FILE_NAME }}
+      GIT_BRANCH: ${{ needs.ENV_VAR.outputs.GIT_BRANCH }}
+      NAMESPACE: ${{ needs.ENV_VAR.outputs.NAMESPACE }}   
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS Identity
+        run: aws sts get-caller-identity
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set Image Tag
+        run: |
+          echo "IMAGE_TAG=${{ env.APPLICATION_NAME }}_${{ env.CURRENT_DATE }}_${{ env.BUILD_TYPE }}_v1.0.${{ github.run_number }}" >> $GITHUB_ENV
+
+      - name: Build Docker Image
+        run: |
+          docker build -t ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.REPOSITORY }}:${IMAGE_TAG} .
+
+      - name: Push Docker Image
+        run: |
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.REPOSITORY }}:${IMAGE_TAG}
+          
+      - name: Update values.yaml file
+        run: |
+          sed -i "s|image:.*|image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.REPOSITORY }}:${{ env.APPLICATION_NAME }}_${{ env.CURRENT_DATE }}_${{ env.BUILD_TYPE }}_v1.0.${{ github.run_number }}|" ./${{ env.DEPLOYMENT_FILE_NAME }}          
+          sed -i "s|namespace:.*|namespace: ${{ env.NAMESPACE }}|" ./${{ env.DEPLOYMENT_FILE_NAME }}         
+      - name: Commit changes
+        run: |
+          git config --global user.name ${{ env.GIT_USER_NAME }}
+          git config --global user.email ${{ env.GIT_USER_MAIL }}
+          git add ${{ env.DEPLOYMENT_FILE_NAME }}
+          git commit -m "Update image to ${{ env.APPLICATION_NAME }}_${{ env.CURRENT_DATE }}_${{ env.BUILD_TYPE }}_v1.0.${{ github.run_number }}"
+      - name: Push changes
+        run: |
+          git remote set-url origin https://x-access-token:${{ env.GITHUB_TOKEN }}@github.com/${{ github.repository }}
+          git push origin ${{ env.GIT_BRANCH }}
+      - name: Verify values file data
+        run: cat  ${{ env.DEPLOYMENT_FILE_NAME }} 
+      - name: Sleep for 120 seconds
+        run: sleep 120
+
+  DEPLOY:
+    needs:
+      - ENV_VAR
+      - BUILD_AND_PUBLISH
+    runs-on: ubuntu-latest
+    env:
+      GIT_BRANCH: ${{ needs.ENV_VAR.outputs.GIT_BRANCH }}
+      AWS_REGION: ${{ needs.ENV_VAR.outputs.AWS_REGION }}
+      AWS_EKS: ${{ needs.ENV_VAR.outputs.AWS_EKS }}
+      DEPLOYMENT_FILE_NAME: ${{ needs.ENV_VAR.outputs.DEPLOYMENT_FILE_NAME }}
+      DEPLOYMENT_FOLDER_PATH: ${{ needs.ENV_VAR.outputs.DEPLOYMENT_FOLDER_PATH }}
+      # APPLICATION_NAME: ${{ needs.ENV_VAR.outputs.APPLICATION_NAME }}
+      NAMESPACE: ${{ needs.ENV_VAR.outputs.NAMESPACE }}
+      # HELM_CHART_NAME: ${{ needs.ENV_VAR.outputs.HELM_CHART_NAME }}
+    steps:
+      - name: code checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pull latest changes
+        run: git pull origin ${{ env.GIT_BRANCH }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: update kube config
+        run: aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{env.AWS_EKS }}
+      - name: Install eksctl
+        run: >
+          curl --silent --location
+          "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname
+          -s)_amd64.tar.gz" | tar xz -C /tmp
+
+          sudo mv /tmp/eksctl /usr/local/bin
+
+          eksctl version
+      - name: Login to Amazon ECR
+        run: >
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login
+          --username AWS --password-stdin ${{ env.AWS_ACCOUNT_ID
+          }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+      - name: Get Docker image name from Kubernetes before deployment
+        id: get_image_name
+        run: >
+          IMAGE_NAME=$(kubectl get deployment ${{ env.APPLICATION_NAME }} -n ${{
+          env.NAMESPACE }} -o json | jq -r
+          '.spec.template.spec.containers[0].image' | awk -F'/' '{print $NF}')
+
+          echo "$IMAGE_NAME"
+      - name: Display Deployment YAML
+        run: cat ./${{ env.DEPLOYMENT_FILE_NAME }}
+      - name: Deploy to EKS cluster
+        run: |
+          helm upgrade --install ${{ env.APPLICATION_NAME }} -n ${{ env.NAMESPACE }} ./${{ env.DEPLOYMENT_FOLDER_PATH }}
+      - name: Sleep for 30 seconds
+        run: sleep 30
+      - name: Get Docker image name from Kubernetes deployment
+        id: get_image_name_01
+        run: >
+          IMAGE_NAME=$(kubectl get deployment ${{ env.APPLICATION_NAME }} -n ${{
+          env.NAMESPACE }} -o json | jq -r
+          '.spec.template.spec.containers[0].image' | awk -F'/' '{print $NF}')
+
+  HELM_UPDATE:
+    needs:
+      - ENV_VAR
+      - DEPLOY
+    runs-on: ubuntu-latest
+    env:
+      DEPLOYMENT_FILE_NAME: ${{ needs.ENV_VAR.outputs.DEPLOYMENT_FILE_NAME }}
+      # APPLICATION_NAME: ${{ needs.ENV_VAR.outputs.APPLICATION_NAME }}
+      CURRENT_DATE: ${{ needs.ENV_VAR.outputs.CURRENT_DATE }}
+      GIT_BRANCH: ${{ needs.ENV_VAR.outputs.GIT_BRANCH }}
+      BUILD_TYPE: ${{ needs.ENV_VAR.outputs.BUILD_TYPE }}
+    steps:
+      - name: code checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pull latest changes
+        run: git pull origin ${{ env.GIT_BRANCH }}       
+      - name: Update Image tag
+        run: >
+            sed -i "s|image:.*|image: git-latest-commit_update-image |" ./${{ env.DEPLOYMENT_FILE_NAME }}
+      - name: Commit changes
+        run: |
+            git config --global user.name ${{ env.GIT_USER_NAME }}
+            git config --global user.email ${{ env.GIT_USER_MAIL }}
+            git add ${{ env.DEPLOYMENT_FILE_NAME }}
+            git commit -m "Update image to ${{ env.APPLICATION_NAME }}_${{ env.CURRENT_DATE }}_${{ env.BUILD_TYPE }}_v1.0.${{ github.run_number }}"
+      - name: Push changes
+        run: |
+            git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}
+            git push origin ${{ env.GIT_BRANCH }}
+
+  SEND_EMAIL_NOTIFICATION_DEPLOY:
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true)
+    needs:
+      - ENV_VAR
+      - DEPLOY
+      - HELM_UPDATE
+    runs-on: ubuntu-latest
+    env:
+      BUILD_TYPE: ${{ needs.ENV_VAR.outputs.BUILD_TYPE }}
+      # APPLICATION_NAME: ${{ needs.ENV_VAR.outputs.APPLICATION_NAME }}
+    steps:
+      - name: Send email via Microsoft Graph
+        run: |
+          curl -X POST https://login.microsoftonline.com/${{ env.AZURE_TENANT_ID }}/oauth2/v2.0/token \
+            -F grant_type=client_credentials \
+            -F client_id=${{ env.AZURE_CLIENT_ID }} \
+            -F client_secret=${{ env.AZURE_CLIENT_SECRET }} \
+            -F scope=https://graph.microsoft.com/.default \
+            -o token.json
+
+          ACCESS_TOKEN=$(jq -r .access_token < token.json)
+
+          # Capture job results
+          DEPLOY_STATUS="${{ needs.DEPLOY.result }}"
+
+          # Log captured statuses
+          echo "DEPLOY_STATUS: $DEPLOY_STATUS"
+
+          # Determine the overall status
+          if [[ "$DEPLOY_STATUS" == "success" ]]; then
+            STATUS="the ${{ env.APPLICATION_NAME }} deployment succeeded"
+          else
+            STATUS="the ${{ env.APPLICATION_NAME }} deployment failed"
+          fi
+
+          # Create recipients list
+          IFS=',' read -ra RECIPIENTS <<< "${{ env.EMAIL_RECIPIENTS }}"
+          RECIPIENTS_JSON=$(for email in "${RECIPIENTS[@]}"; do printf '{"emailAddress": {"address": "%s"}},' "$email"; done | sed 's/,$//')
+
+          curl -X POST https://graph.microsoft.com/v1.0/users/${{ env.EMAIL_FROM }}/sendMail \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "message": {
+                "subject": "GitHub Action Notification ${{ env.APPLICATION_NAME }} - ${{ env.BUILD_TYPE }} deployment",
+                "body": {
+                  "contentType": "Text",
+                  "content": "The GitHub Action ${{ env.BUILD_TYPE }} workflow has '"${STATUS}"'. "
+                },
+                "toRecipients": ['"$RECIPIENTS_JSON"']
+                    }
+                  }
+                ]
+              }
+            }'
+            
